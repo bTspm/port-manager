@@ -202,7 +202,7 @@ MIT License - Feel free to use, modify, and distribute.
 
 ## Version
 
-**Current:** v1.5.0
+**Current:** v1.7.0
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history and release notes.
 

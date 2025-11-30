@@ -222,7 +222,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = """
         A native macOS menu bar app for managing TCP ports.
 
-        Version 1.6.0
+        Version 1.7.0
 
         Features:
         • View all listening TCP ports

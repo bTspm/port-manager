@@ -48,6 +48,7 @@ class HoverBox: NSBox {
     var hoverFillColor: NSColor = NSColor.controlAccentColor.withAlphaComponent(0.05)
     var normalFillColor: NSColor = .clear
     private var trackingArea: NSTrackingArea?
+    var onHoverChange: ((Bool) -> Void)?
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -70,6 +71,7 @@ class HoverBox: NSBox {
             context.allowsImplicitAnimation = true
             self.fillColor = hoverFillColor
         })
+        onHoverChange?(true)
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -78,6 +80,58 @@ class HoverBox: NSBox {
             context.duration = 0.2
             context.allowsImplicitAnimation = true
             self.fillColor = normalFillColor
+        })
+        onHoverChange?(false)
+    }
+}
+
+// Copy button with checkmark feedback
+class CopyButton: NSButton {
+    private var originalImage: NSImage?
+    private var checkmarkImage: NSImage?
+    var portInfo: PortInfo?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    private func setup() {
+        isBordered = false
+        bezelStyle = .regularSquare
+        title = ""
+        alphaValue = 0
+
+        let config = NSImage.SymbolConfiguration(pointSize: 10, weight: .regular)
+        originalImage = NSImage(systemSymbolName: "doc.on.doc", accessibilityDescription: "Copy")?
+            .withSymbolConfiguration(config)
+        checkmarkImage = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")?
+            .withSymbolConfiguration(config)
+
+        image = originalImage
+        contentTintColor = .secondaryLabelColor
+    }
+
+    func showCopiedFeedback() {
+        // Animate to checkmark
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            self.image = checkmarkImage
+            self.animator().contentTintColor = .systemGreen
+        }, completionHandler: {
+            // Animate back to copy icon
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                NSAnimationContext.runAnimationGroup({ context in
+                    context.duration = 0.2
+                    self.image = self.originalImage
+                    self.animator().contentTintColor = .secondaryLabelColor
+                })
+            }
         })
     }
 }
@@ -95,12 +149,31 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
     var killSelectedButton: NSButton!
     var savedScrollPosition: NSPoint?  // Save scroll position for auto-refresh
 
+    // Sorting state
+    enum SortColumn: String {
+        case port, process, pid, framework, user, none
+    }
+    var currentSortColumn: SortColumn = .none
+    var sortAscending: Bool = true
+
     init(ports: [PortInfo], selectedPorts: Set<Int> = [], scrollPosition: NSPoint? = nil) {
         self.portsSnapshot = ports
         self.filteredPorts = ports
         self.selectedPortNumbers = selectedPorts
         self.savedScrollPosition = scrollPosition
         super.init(nibName: nil, bundle: nil)
+
+        // Load sort preferences
+        if let savedColumn = UserDefaults.standard.string(forKey: "SortColumn"),
+           let column = SortColumn(rawValue: savedColumn) {
+            currentSortColumn = column
+        }
+        sortAscending = UserDefaults.standard.object(forKey: "SortAscending") as? Bool ?? true
+
+        // Apply initial sorting
+        if currentSortColumn != .none {
+            applySorting()
+        }
     }
 
     var currentScrollPosition: NSPoint {
@@ -221,8 +294,35 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         separator.boxType = .separator
         view.addSubview(separator)
 
-        // Scroll view - native
-        scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 452))
+        // Column headers for sorting
+        let sortHeaderBar = NSView(frame: NSRect(x: 0, y: 428, width: 460, height: 24))
+        sortHeaderBar.wantsLayer = true
+        sortHeaderBar.layer?.backgroundColor = NSColor.windowBackgroundColor.withAlphaComponent(0.5).cgColor
+        view.addSubview(sortHeaderBar)
+
+        // Port header
+        let portHeader = createSortHeader(title: "PORT", frame: NSRect(x: 16, y: 430, width: 80, height: 20), column: .port)
+        view.addSubview(portHeader)
+
+        // Process header
+        let processHeader = createSortHeader(title: "PROCESS", frame: NSRect(x: 102, y: 430, width: 80, height: 20), column: .process)
+        view.addSubview(processHeader)
+
+        // PID header
+        let pidHeader = createSortHeader(title: "PID", frame: NSRect(x: 188, y: 430, width: 50, height: 20), column: .pid)
+        view.addSubview(pidHeader)
+
+        // User header
+        let userHeader = createSortHeader(title: "USER", frame: NSRect(x: 244, y: 430, width: 60, height: 20), column: .user)
+        view.addSubview(userHeader)
+
+        // Separator below headers
+        let headerSeparator = NSBox(frame: NSRect(x: 0, y: 428, width: 460, height: 1))
+        headerSeparator.boxType = .separator
+        view.addSubview(headerSeparator)
+
+        // Scroll view - native (adjusted height)
+        scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 428))
         scrollView.hasVerticalScroller = true
         scrollView.autohidesScrollers = true
         scrollView.backgroundColor = .clear
@@ -483,6 +583,10 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         rowBackground.hoverFillColor = isSelected ?
             NSColor.controlAccentColor.withAlphaComponent(0.15) :
             NSColor.controlAccentColor.withAlphaComponent(0.05)
+
+        // Will be used to show/hide copy buttons
+        var copyButtons: [CopyButton] = []
+
         documentView.addSubview(rowBackground)
 
         // Status indicator dot - color coded by category
@@ -496,31 +600,68 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         let portLabel = NSTextField(labelWithString: ":\(port.port)")
         portLabel.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
         portLabel.textColor = .labelColor
-        portLabel.frame = NSRect(x: 36, y: yPos + 16, width: 60, height: 16)
+        portLabel.frame = NSRect(x: 36, y: yPos + 16, width: 40, height: 16)
         portLabel.isBezeled = false
         portLabel.isEditable = false
         portLabel.drawsBackground = false
         documentView.addSubview(portLabel)
 
+        // Copy port button
+        let copyPortButton = CopyButton(frame: NSRect(x: 78, y: yPos + 15, width: 16, height: 16))
+        copyPortButton.target = self
+        copyPortButton.action = #selector(copyPortQuick(_:))
+        copyPortButton.portInfo = port
+        copyPortButton.toolTip = "Copy port number"
+        copyButtons.append(copyPortButton)
+        documentView.addSubview(copyPortButton)
+
         // Process name
         let processLabel = NSTextField(labelWithString: port.process)
         processLabel.font = .systemFont(ofSize: 13, weight: .medium)
         processLabel.textColor = .labelColor
-        processLabel.frame = NSRect(x: 102, y: yPos + 16, width: 80, height: 16)
+        processLabel.frame = NSRect(x: 102, y: yPos + 16, width: 60, height: 16)
         processLabel.isBezeled = false
         processLabel.isEditable = false
         processLabel.drawsBackground = false
         documentView.addSubview(processLabel)
 
+        // Copy process button
+        let copyProcessButton = CopyButton(frame: NSRect(x: 164, y: yPos + 15, width: 16, height: 16))
+        copyProcessButton.target = self
+        copyProcessButton.action = #selector(copyProcessQuick(_:))
+        copyProcessButton.portInfo = port
+        copyProcessButton.toolTip = "Copy process name"
+        copyButtons.append(copyProcessButton)
+        documentView.addSubview(copyProcessButton)
+
         // PID
         let pidLabel = NSTextField(labelWithString: "\(port.pid)")
         pidLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         pidLabel.textColor = .secondaryLabelColor
-        pidLabel.frame = NSRect(x: 188, y: yPos + 17, width: 50, height: 14)
+        pidLabel.frame = NSRect(x: 188, y: yPos + 17, width: 35, height: 14)
         pidLabel.isBezeled = false
         pidLabel.isEditable = false
         pidLabel.drawsBackground = false
         documentView.addSubview(pidLabel)
+
+        // Copy PID button
+        let copyPIDButton = CopyButton(frame: NSRect(x: 225, y: yPos + 15, width: 16, height: 16))
+        copyPIDButton.target = self
+        copyPIDButton.action = #selector(copyPIDQuick(_:))
+        copyPIDButton.portInfo = port
+        copyPIDButton.toolTip = "Copy PID"
+        copyButtons.append(copyPIDButton)
+        documentView.addSubview(copyPIDButton)
+
+        // Set up hover callback to show/hide copy buttons
+        rowBackground.onHoverChange = { isHovering in
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.15
+                copyButtons.forEach { button in
+                    button.animator().alphaValue = isHovering ? 1.0 : 0.0
+                }
+            })
+        }
 
         // Framework badge - native style with visual badge
         if let framework = port.framework {
@@ -628,14 +769,8 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         separator.alphaValue = 0.3
         documentView.addSubview(separator)
 
-        // Make row clickable for context menu
-        let clickArea = NSButton(frame: NSRect(x: 8, y: yPos, width: 340, height: 44))
-        clickArea.isBordered = false
-        clickArea.bezelStyle = .regularSquare
-        clickArea.title = ""
-        clickArea.tag = index
-        clickArea.target = self
-        clickArea.action = #selector(portClicked(_:))
+        // Make row clickable for context menu - only responds to right-click
+        let clickArea = NSView(frame: NSRect(x: 8, y: yPos, width: 340, height: 44))
         documentView.addSubview(clickArea)
 
         // Tooltip with full details
@@ -720,6 +855,126 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         }
     }
 
+    // MARK: - Sorting
+    func createSortHeader(title: String, frame: NSRect, column: SortColumn) -> NSButton {
+        let button = NSButton(frame: frame)
+        button.isBordered = false
+        button.bezelStyle = .regularSquare
+        button.alignment = .left
+        button.contentTintColor = .secondaryLabelColor
+        button.target = self
+        button.action = #selector(sortByColumn(_:))
+        button.tag = column.hashValue
+
+        // Store column in identifier
+        switch column {
+        case .port: button.identifier = NSUserInterfaceItemIdentifier("port")
+        case .process: button.identifier = NSUserInterfaceItemIdentifier("process")
+        case .pid: button.identifier = NSUserInterfaceItemIdentifier("pid")
+        case .framework: button.identifier = NSUserInterfaceItemIdentifier("framework")
+        case .user: button.identifier = NSUserInterfaceItemIdentifier("user")
+        case .none: break
+        }
+
+        // Update button title with sort indicator
+        updateSortHeaderTitle(button, title: title, column: column)
+
+        return button
+    }
+
+    func updateSortHeaderTitle(_ button: NSButton, title: String, column: SortColumn) {
+        let isSorted = currentSortColumn == column
+        let arrow = isSorted ? (sortAscending ? " ▲" : " ▼") : ""
+
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: isSorted ? NSColor.labelColor : NSColor.secondaryLabelColor
+        ]
+
+        button.attributedTitle = NSAttributedString(string: title + arrow, attributes: attributes)
+    }
+
+    func updateAllSortHeaders() {
+        // Update all header buttons to reflect current sort state
+        for subview in view.subviews {
+            if let button = subview as? NSButton,
+               let identifier = button.identifier?.rawValue,
+               ["port", "process", "pid", "framework", "user"].contains(identifier) {
+
+                let column: SortColumn
+                switch identifier {
+                case "port": column = .port
+                case "process": column = .process
+                case "pid": column = .pid
+                case "framework": column = .framework
+                case "user": column = .user
+                default: continue
+                }
+
+                let title = button.title.replacingOccurrences(of: " ▲", with: "").replacingOccurrences(of: " ▼", with: "")
+                updateSortHeaderTitle(button, title: title, column: column)
+            }
+        }
+    }
+
+    @objc func sortByColumn(_ sender: NSButton) {
+        guard let identifier = sender.identifier?.rawValue else { return }
+        let column: SortColumn
+
+        switch identifier {
+        case "port": column = .port
+        case "process": column = .process
+        case "pid": column = .pid
+        case "framework": column = .framework
+        case "user": column = .user
+        default: return
+        }
+
+        // Toggle sort direction if same column, otherwise ascending
+        if currentSortColumn == column {
+            sortAscending.toggle()
+        } else {
+            currentSortColumn = column
+            sortAscending = true
+        }
+
+        // Save sort preferences
+        UserDefaults.standard.set(currentSortColumn.rawValue, forKey: "SortColumn")
+        UserDefaults.standard.set(sortAscending, forKey: "SortAscending")
+
+        // Update header indicators
+        updateAllSortHeaders()
+
+        // Apply sorting and refresh
+        applySorting()
+        refreshView(preserveScroll: false)
+    }
+
+    func applySorting() {
+        guard currentSortColumn != .none else { return }
+
+        filteredPorts.sort { port1, port2 in
+            let result: Bool
+            switch currentSortColumn {
+            case .port:
+                result = port1.port < port2.port
+            case .process:
+                result = port1.process.lowercased() < port2.process.lowercased()
+            case .pid:
+                result = port1.pid < port2.pid
+            case .framework:
+                let f1 = port1.framework?.lowercased() ?? ""
+                let f2 = port2.framework?.lowercased() ?? ""
+                result = f1 < f2
+            case .user:
+                result = port1.user.lowercased() < port2.user.lowercased()
+            case .none:
+                result = false
+            }
+            return sortAscending ? result : !result
+        }
+    }
+
     func refreshView(preserveScroll: Bool = false) {
         // Save current scroll position
         let scrollPosition = scrollView.contentView.bounds.origin
@@ -766,6 +1021,11 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
                 port.category.rawValue.lowercased().contains(searchLower) ||
                 (port.dockerContainer?.lowercased().contains(searchLower) ?? false)
             }
+        }
+
+        // Apply current sorting to filtered results
+        if currentSortColumn != .none {
+            applySorting()
         }
 
         // Clear selection when filter changes
@@ -1002,6 +1262,27 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         NSPasteboard.general.setString("kill -9 \(port.pid)", forType: .string)
     }
 
+    // MARK: - Quick Copy Actions
+    @objc func copyPortQuick(_ sender: CopyButton) {
+        guard let port = sender.portInfo else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("\(port.port)", forType: .string)
+        sender.showCopiedFeedback()
+    }
+
+    @objc func copyProcessQuick(_ sender: CopyButton) {
+        guard let port = sender.portInfo else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(port.process, forType: .string)
+        sender.showCopiedFeedback()
+    }
+
+    @objc func copyPIDQuick(_ sender: CopyButton) {
+        guard let port = sender.portInfo else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString("\(port.pid)", forType: .string)
+        sender.showCopiedFeedback()
+    }
 
     // MARK: - Custom Commands
     struct CustomCommand: Codable {

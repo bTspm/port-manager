@@ -2,6 +2,37 @@
 
 All notable changes to Port Manager will be documented in this file.
 
+## [1.7.0] - 2024-11-30
+
+### Added
+- 📋 Quick Copy Actions
+  - One-click copy buttons for Port, PID, and Process name
+  - Copy buttons appear on row hover with smooth fade-in animation (150ms)
+  - Visual checkmark feedback when copied (green checkmark for 0.8s)
+  - CopyButton component with animated icon transitions
+  - No need for right-click menu to copy common values
+  - Copy icons positioned next to each field for quick access
+- 🔀 Sorting Options
+  - Clickable column headers for PORT, PROCESS, PID, and USER
+  - Visual sort indicators (▲ ▼) show active column and direction
+  - Toggle ascending/descending by clicking same header
+  - Persistent sort preferences saved in UserDefaults
+  - Sorting maintained during search and filtering
+  - Active sort column highlighted with darker color
+  - Column header bar with subtle background
+  - Support for sorting by port number, process name, PID, framework, and user
+
+### Changed
+- 🎯 Adjusted scroll view height to accommodate column headers (452px → 428px)
+- 🖱️ Improved row interaction by using NSView for context menu instead of NSButton
+- 📏 Optimized label widths for better spacing with copy buttons
+
+### Fixed
+- 🐛 Copy buttons now receive clicks properly
+  - Changed clickArea from NSButton to NSView to prevent click interception
+  - Removed overlapping button action that triggered "kill process" dialog
+  - Right-click context menu still works correctly on rows
+
 ## [1.6.0] - 2024-11-30
 
 ### Added
