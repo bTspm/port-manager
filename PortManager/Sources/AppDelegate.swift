@@ -117,14 +117,45 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var eventMonitor: Any?
     var favoritePorts: Set<Int> = []
     var selectedPortNumbers: Set<Int> = []  // Persist selections across view refreshes
+    var preferencesWindowController: PreferencesWindowController?
 
     func applicationDidFinishLaunching(_ aNotification: Notification) {
+        // Set default preferences if not set
+        setDefaultPreferences()
+
         loadFavorites()
         setupMenuBar()
         setupStatusItem()
         setupPopover()
         setupEventMonitor()
         refreshPorts()
+        startAutoRefresh()
+
+        // Listen for preference changes
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(preferencesChanged),
+            name: Notification.Name("PreferencesChanged"),
+            object: nil
+        )
+    }
+
+    func setDefaultPreferences() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: "RefreshInterval") == nil {
+            defaults.set(2.0, forKey: "RefreshInterval")
+        }
+        if defaults.object(forKey: "AutoRefreshEnabled") == nil {
+            defaults.set(true, forKey: "AutoRefreshEnabled")
+        }
+        if defaults.object(forKey: "LaunchAtLogin") == nil {
+            defaults.set(false, forKey: "LaunchAtLogin")
+        }
+    }
+
+    @objc func preferencesChanged() {
+        // Restart timer with new interval
+        refreshTimer?.invalidate()
         startAutoRefresh()
     }
 
@@ -168,6 +199,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         appMenu.addItem(NSMenuItem(title: "About Port Manager", action: #selector(showAbout), keyEquivalent: ""))
         appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(NSMenuItem(title: "Preferences...", action: #selector(showPreferences), keyEquivalent: ","))
+        appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(NSMenuItem(title: "Refresh", action: #selector(manualRefresh), keyEquivalent: "r"))
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(NSMenuItem(title: "Quit Port Manager", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
@@ -175,10 +208,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.mainMenu = mainMenu
     }
 
+    @objc func showPreferences() {
+        if preferencesWindowController == nil {
+            preferencesWindowController = PreferencesWindowController()
+        }
+        preferencesWindowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     @objc func showAbout() {
         let alert = NSAlert()
         alert.messageText = "Port Manager"
-        alert.informativeText = "A menu bar app to view and manage TCP ports.\n\nVersion 1.0\n\nFeatures:\n• View all listening TCP ports\n• Categorize ports by type\n• Kill processes with one click\n• Framework detection\n• Right-click to copy port info"
+        alert.informativeText = """
+        A native macOS menu bar app for managing TCP ports.
+
+        Version 1.5.0
+
+        Features:
+        • View all listening TCP ports
+        • Categorize ports by type
+        • Kill processes with one click
+        • Batch operations
+        • Framework & Docker detection
+        • Favorites and custom commands
+        • Keyboard shortcuts (⌘K, ⌘R, ⌘F, ⌘A)
+        • Customizable preferences
+        """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
@@ -216,8 +271,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func setupPopover() {
         popover = NSPopover()
-        // Create with empty ports initially
-        popover.contentViewController = SimpleTestViewController()
         popover.behavior = .transient
         popover.animates = true
     }
@@ -261,7 +314,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Auto Refresh
 
     func startAutoRefresh() {
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 10.0, repeats: true) { [weak self] _ in
+        let autoRefreshEnabled = UserDefaults.standard.bool(forKey: "AutoRefreshEnabled")
+        guard autoRefreshEnabled else { return }
+
+        let interval = UserDefaults.standard.double(forKey: "RefreshInterval")
+        let refreshInterval = interval > 0 ? interval : 2.0
+
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
             self?.refreshPorts()
             if self?.popover.isShown == true {
                 self?.updatePortListViewController()
@@ -287,6 +346,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try task.run()
             task.waitUntilExit()
+
+            // Check exit status
+            if task.terminationStatus != 0 {
+                return []
+            }
         } catch {
             return []
         }
@@ -296,6 +360,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         var portDict: [Int: PortInfo] = [:]
         let lines = output.components(separatedBy: .newlines)
+
+        // Collect all PIDs first for batch processing
+        var pidSet: Set<Int> = []
+        var portData: [(port: Int, pid: Int, process: String, user: String)] = []
 
         for line in lines.dropFirst() {  // Skip header
             let parts = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
@@ -315,18 +383,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Skip if we already have this port (deduplicate)
             if portDict[port] != nil { continue }
 
-            let command = getCommandPath(pid: pid)
-            let category = PortCategory.categorize(port: port, process: processName)
-            let framework = detectFramework(command: command, process: processName)
-            let dockerInfo = detectDockerContainer(pid: pid, command: command)
-            let isFav = isFavorite(port: port)
+            pidSet.insert(pid)
+            portData.append((port: port, pid: pid, process: processName, user: user))
+        }
+
+        // Batch fetch all command paths at once (more efficient)
+        let commandCache = batchGetCommandPaths(pids: Array(pidSet))
+
+        // Now process each port with cached command data
+        for data in portData {
+            let command = commandCache[data.pid] ?? ""
+            let category = PortCategory.categorize(port: data.port, process: data.process)
+            let framework = detectFramework(command: command, process: data.process)
+            let dockerInfo = detectDockerContainer(pid: data.pid, command: command)
+            let isFav = isFavorite(port: data.port)
 
             let portInfo = PortInfo(
-                port: port,
-                pid: pid,
-                process: processName,
+                port: data.port,
+                pid: data.pid,
+                process: data.process,
                 command: command,
-                user: user,
+                user: data.user,
                 category: category,
                 framework: framework,
                 dockerContainer: dockerInfo?.name,
@@ -335,7 +412,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 isFavorite: isFav
             )
 
-            portDict[port] = portInfo
+            portDict[data.port] = portInfo
         }
 
         // Sort: favorites first, then by category, then by port number
@@ -351,6 +428,46 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Finally by port number
             return a.port < b.port
         }
+    }
+
+    // Batch fetch command paths for multiple PIDs at once
+    func batchGetCommandPaths(pids: [Int]) -> [Int: String] {
+        guard !pids.isEmpty else { return [:] }
+
+        var commandCache: [Int: String] = [:]
+
+        // Get all commands in one ps call
+        let task = Process()
+        task.launchPath = "/bin/ps"
+        task.arguments = ["-p", pids.map(String.init).joined(separator: ","), "-o", "pid=,command="]
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+        task.standardError = Pipe()
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let output = String(data: data, encoding: .utf8) else { return [:] }
+
+            for line in output.components(separatedBy: .newlines) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                guard !trimmed.isEmpty else { continue }
+
+                // Split on first space to separate PID from command
+                let parts = trimmed.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+                guard parts.count == 2,
+                      let pid = Int(parts[0]) else { continue }
+
+                commandCache[pid] = String(parts[1])
+            }
+        } catch {
+            return [:]
+        }
+
+        return commandCache
     }
 
     func getCommandPath(pid: Int) -> String {

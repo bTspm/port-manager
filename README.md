@@ -7,10 +7,13 @@ A native macOS menu bar application for monitoring and managing TCP ports on you
 - **Native macOS Design** - Clean, authentic macOS interface following Apple's Human Interface Guidelines
 - **Smart Categorization** - Automatically groups ports into Web, Database, Cache, System, and Other categories
 - **Quick Actions** - Kill processes, favorite ports, batch operations, custom commands
+- **Keyboard Shortcuts** - ⌘K (kill), ⌘R (refresh), ⌘F (search), ⌘A (select all), ESC (clear)
+- **Preferences** - Customize refresh interval, auto-refresh, and launch at login
 - **Framework Detection** - Automatically detects Node.js, Python, Ruby, Go, Rust, and more
 - **Docker Integration** - Shows Docker container names and allows container control
 - **Search & Filter** - Quickly find ports by number, process name, or framework
-- **Auto-Refresh** - Updates every 2 seconds to show current port status
+- **Auto-Refresh** - Configurable refresh interval (default 2 seconds)
+- **Performance Optimized** - Batch process scanning for faster updates
 - **Menu Bar Only** - No Dock icon, stays out of your way
 - **Dark Mode** - Full support for both light and dark appearance
 
@@ -63,6 +66,15 @@ open PortManager.app
 - Click the star icon to pin frequently used ports to the top
 - Favorited ports appear in a dedicated "Favorites" section
 
+### Keyboard Shortcuts
+
+- **⌘F** - Focus search field
+- **⌘R** - Refresh ports manually
+- **⌘K** - Kill selected ports
+- **⌘A** - Select all ports
+- **⌘,** - Open preferences
+- **ESC** - Clear search or selection
+
 ## Categories
 
 Ports are automatically categorized:
@@ -90,16 +102,18 @@ xcode-select --install
 port-manager/
 ├── PortManager/
 │   ├── Sources/
-│   │   ├── AppDelegate.swift                    # Main app logic
+│   │   ├── main.swift                           # Entry point
+│   │   ├── AppDelegate.swift                    # Main app logic & port detection
 │   │   ├── StaticPortListViewController.swift   # Main UI controller
-│   │   ├── PortListViewController.swift         # Legacy UI
-│   │   ├── PortRowView.swift                    # Row components
-│   │   ├── CategoryHeaderView.swift             # Category headers
-│   │   └── main.swift                           # Entry point
+│   │   └── PreferencesWindowController.swift    # Preferences window
 │   └── Info.plist                               # App configuration
 ├── PortManager.app/                             # Built app (after build)
 ├── build.sh                                     # Build script
-└── README.md                                    # This file
+├── run-debug.sh                                 # Debug script
+├── run-and-log.sh                               # Logging script
+├── test-run.sh                                  # Test script
+├── README.md                                    # This file
+└── CHANGELOG.md                                 # Version history
 ```
 
 ## How It Works
@@ -112,14 +126,17 @@ Port Manager uses native macOS commands:
 4. **Framework Detection**: Analyzes command paths to identify frameworks
 5. **Categorization**: Intelligently categorizes based on process name and port ranges
 
+## Preferences
+
+Access preferences via the menu bar: **Port Manager → Preferences...** or press **⌘,**
+
+**Available Settings:**
+
+- **Refresh Interval** - How often to scan for ports (0.5 - 60 seconds, default: 2)
+- **Auto-Refresh** - Enable/disable automatic port scanning
+- **Launch at Login** - Start Port Manager when you log in
+
 ## Customization
-
-### Change Refresh Interval
-
-Edit `AppDelegate.swift` and modify the timer interval (currently 2 seconds):
-```swift
-Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { ... }
-```
 
 ### Change Menu Bar Icon
 
@@ -185,7 +202,9 @@ MIT License - Feel free to use, modify, and distribute.
 
 ## Version
 
-Current: v1.4.1
+**Current:** v1.5.0
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history and release notes.
 
 ---
 

@@ -48,12 +48,40 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         titleLabel.drawsBackground = false
         view.addSubview(titleLabel)
 
-        // Count label - native style
+        // Refresh button (refresh icon)
+        let refreshButton = NSButton(frame: NSRect(x: 394, y: 528, width: 22, height: 22))
+        refreshButton.isBordered = false
+        refreshButton.bezelStyle = .regularSquare
+        refreshButton.title = ""
+        let refreshConfig = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh")?
+            .withSymbolConfiguration(refreshConfig)
+        refreshButton.contentTintColor = .secondaryLabelColor
+        refreshButton.target = self
+        refreshButton.action = #selector(refreshPorts(_:))
+        refreshButton.toolTip = "Refresh (⌘R)"
+        view.addSubview(refreshButton)
+
+        // Preferences button (gear icon) - top right
+        let prefsButton = NSButton(frame: NSRect(x: 422, y: 528, width: 22, height: 22))
+        prefsButton.isBordered = false
+        prefsButton.bezelStyle = .regularSquare
+        prefsButton.title = ""
+        let prefsConfig = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
+        prefsButton.image = NSImage(systemSymbolName: "gear", accessibilityDescription: "Preferences")?
+            .withSymbolConfiguration(prefsConfig)
+        prefsButton.contentTintColor = .secondaryLabelColor
+        prefsButton.target = self
+        prefsButton.action = #selector(openPreferences(_:))
+        prefsButton.toolTip = "Preferences (⌘,)"
+        view.addSubview(prefsButton)
+
+        // Count label - native style, positioned before icons
         let countText = isFiltering ? "\(filteredPorts.count)/\(portsSnapshot.count)" : "\(portsSnapshot.count)"
         countLabel = NSTextField(labelWithString: countText)
         countLabel.font = .systemFont(ofSize: 11, weight: .regular)
         countLabel.textColor = .secondaryLabelColor
-        countLabel.frame = NSRect(x: 390, y: 532, width: 54, height: 14)
+        countLabel.frame = NSRect(x: 320, y: 532, width: 65, height: 14)
         countLabel.alignment = .right
         countLabel.isBezeled = false
         countLabel.isEditable = false
@@ -113,6 +141,76 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         view.addSubview(scrollView)
 
         buildScrollViewContent()
+    }
+
+    // MARK: - Keyboard Shortcuts
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        view.window?.makeFirstResponder(view)
+    }
+
+    override var acceptsFirstResponder: Bool { return true }
+
+    override func keyDown(with event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+
+        // Cmd+F - Focus search
+        if flags == .command && event.charactersIgnoringModifiers == "f" {
+            view.window?.makeFirstResponder(searchField)
+            return
+        }
+
+        // Cmd+R - Refresh
+        if flags == .command && event.charactersIgnoringModifiers == "r" {
+            appDelegate?.refreshPorts()
+            return
+        }
+
+        // Cmd+K - Kill selected
+        if flags == .command && event.charactersIgnoringModifiers == "k" {
+            if !selectedPortNumbers.isEmpty {
+                killSelectedPorts(self)
+            }
+            return
+        }
+
+        // Cmd+A - Select all
+        if flags == .command && event.charactersIgnoringModifiers == "a" {
+            selectAllPorts()
+            return
+        }
+
+        // Escape - Clear search/selection
+        if event.keyCode == 53 { // Escape key
+            if !searchField.stringValue.isEmpty {
+                searchField.stringValue = ""
+                controlTextDidChange(Notification(name: NSControl.textDidChangeNotification, object: searchField))
+            } else if !selectedPortNumbers.isEmpty {
+                clearSelection()
+            }
+            return
+        }
+
+        super.keyDown(with: event)
+    }
+
+    func selectAllPorts() {
+        let portsToSelect = isFiltering ? filteredPorts : portsSnapshot
+        selectedPortNumbers = Set(portsToSelect.map { $0.port })
+        refreshView(preserveScroll: true)
+    }
+
+    func clearSelection() {
+        selectedPortNumbers.removeAll()
+        refreshView(preserveScroll: true)
+    }
+
+    @objc func openPreferences(_ sender: Any) {
+        appDelegate?.showPreferences()
+    }
+
+    @objc func refreshPorts(_ sender: Any) {
+        appDelegate?.refreshPorts()
     }
 
     func buildScrollViewContent() {
@@ -539,7 +637,7 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         appDelegate?.selectedPortNumbers = selectedPortNumbers
     }
 
-    @objc func killSelectedPorts(_ sender: NSButton) {
+    @objc func killSelectedPorts(_ sender: Any) {
         guard !selectedPortNumbers.isEmpty else { return }
 
         let selectedPortsList = portsSnapshot.filter { port in
@@ -809,7 +907,7 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
     }
 
     @objc func createCustomCommand(_ sender: NSMenuItem) {
-        guard let port = sender.representedObject as? PortInfo else { return }
+        guard sender.representedObject is PortInfo else { return }
 
         // Create a dialog to add new custom command
         let alert = NSAlert()

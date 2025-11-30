@@ -23,13 +23,8 @@ swiftc -o PortManager.app/Contents/MacOS/PortManager \
     -O \
     PortManager/Sources/main.swift \
     PortManager/Sources/AppDelegate.swift \
-    PortManager/Sources/SimpleTestViewController.swift \
     PortManager/Sources/StaticPortListViewController.swift \
-    PortManager/Sources/MinimalPortListViewController.swift \
-    PortManager/Sources/SimplePortListViewController.swift \
-    PortManager/Sources/PortListViewController.swift \
-    PortManager/Sources/CategoryHeaderView.swift \
-    PortManager/Sources/PortRowView.swift
+    PortManager/Sources/PreferencesWindowController.swift
 
 echo ""
 echo "✅ Build complete!"
