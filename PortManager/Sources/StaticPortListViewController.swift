@@ -1,5 +1,87 @@
 import Cocoa
 
+// Animated button with hover effect
+class HoverButton: NSButton {
+    var hoverColor: NSColor?
+    var normalColor: NSColor?
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let existingArea = trackingArea {
+            removeTrackingArea(existingArea)
+        }
+
+        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeInKeyWindow]
+        trackingArea = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+        if let area = trackingArea {
+            addTrackingArea(area)
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.15
+            if let hover = hoverColor {
+                self.animator().contentTintColor = hover
+            }
+            self.animator().alphaValue = 1.0
+        })
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.15
+            if let normal = normalColor {
+                self.animator().contentTintColor = normal
+            }
+            self.animator().alphaValue = 0.8
+        })
+    }
+}
+
+// Animated row background with hover effect
+class HoverBox: NSBox {
+    var hoverFillColor: NSColor = NSColor.controlAccentColor.withAlphaComponent(0.05)
+    var normalFillColor: NSColor = .clear
+    private var trackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let existingArea = trackingArea {
+            removeTrackingArea(existingArea)
+        }
+
+        let options: NSTrackingArea.Options = [.mouseEnteredAndExited, .activeAlways]
+        trackingArea = NSTrackingArea(rect: bounds, options: options, owner: self, userInfo: nil)
+        if let area = trackingArea {
+            addTrackingArea(area)
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.15
+            context.allowsImplicitAnimation = true
+            self.fillColor = hoverFillColor
+        })
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            context.allowsImplicitAnimation = true
+            self.fillColor = normalFillColor
+        })
+    }
+}
+
 class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
 
     let portsSnapshot: [PortInfo]
@@ -11,12 +93,18 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
     var countLabel: NSTextField!
     var selectedPortNumbers: Set<Int> = []  // Track selected port numbers (not indices)
     var killSelectedButton: NSButton!
+    var savedScrollPosition: NSPoint?  // Save scroll position for auto-refresh
 
-    init(ports: [PortInfo], selectedPorts: Set<Int> = []) {
+    init(ports: [PortInfo], selectedPorts: Set<Int> = [], scrollPosition: NSPoint? = nil) {
         self.portsSnapshot = ports
         self.filteredPorts = ports
         self.selectedPortNumbers = selectedPorts
+        self.savedScrollPosition = scrollPosition
         super.init(nibName: nil, bundle: nil)
+    }
+
+    var currentScrollPosition: NSPoint {
+        return scrollView?.contentView.bounds.origin ?? .zero
     }
 
     required init?(coder: NSCoder) {
@@ -48,11 +136,12 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         titleLabel.drawsBackground = false
         view.addSubview(titleLabel)
 
-        // Refresh button (refresh icon)
+        // Refresh button (refresh icon) - animated
         let refreshButton = NSButton(frame: NSRect(x: 394, y: 528, width: 22, height: 22))
         refreshButton.isBordered = false
         refreshButton.bezelStyle = .regularSquare
         refreshButton.title = ""
+        refreshButton.wantsLayer = true
         let refreshConfig = NSImage.SymbolConfiguration(pointSize: 13, weight: .regular)
         refreshButton.image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: "Refresh")?
             .withSymbolConfiguration(refreshConfig)
@@ -141,6 +230,13 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         view.addSubview(scrollView)
 
         buildScrollViewContent()
+
+        // Restore scroll position if we have one saved (from auto-refresh)
+        if let savedPosition = savedScrollPosition {
+            DispatchQueue.main.async {
+                self.scrollView.contentView.scroll(to: savedPosition)
+            }
+        }
     }
 
     // MARK: - Keyboard Shortcuts
@@ -210,6 +306,18 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
     }
 
     @objc func refreshPorts(_ sender: Any) {
+        // Animate refresh button
+        if let button = sender as? NSButton {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.3
+                let rotation = CABasicAnimation(keyPath: "transform.rotation.z")
+                rotation.fromValue = 0
+                rotation.toValue = Double.pi * 2
+                rotation.duration = 0.5
+                button.layer?.add(rotation, forKey: "rotationAnimation")
+            })
+        }
+
         appDelegate?.refreshPorts()
     }
 
@@ -217,6 +325,12 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         class FlippedView: NSView {
             override var isFlipped: Bool { return true }
         }
+
+        // Animate content changes
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        })
 
         let portsToDisplay = filteredPorts
 
@@ -309,6 +423,10 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
             documentView.addSubview(noResultsLabel)
         }
 
+        // Fade in animation for document view
+        documentView.alphaValue = 0
+        documentView.animator().alphaValue = 1
+
         scrollView.documentView = documentView
         // Scroll position is now handled in refreshView()
     }
@@ -329,11 +447,19 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
     }
 
     func createCategoryHeader(title: String, icon: String, yPos: CGFloat, documentView: NSView, color: NSColor) {
-        // Native macOS header
+        // Category icon with color
+        let iconView = NSImageView(frame: NSRect(x: 18, y: yPos + 4, width: 12, height: 12))
+        let iconConfig = NSImage.SymbolConfiguration(pointSize: 9, weight: .semibold)
+        iconView.image = NSImage(systemSymbolName: icon, accessibilityDescription: nil)?
+            .withSymbolConfiguration(iconConfig)
+        iconView.contentTintColor = color
+        documentView.addSubview(iconView)
+
+        // Native macOS header with better styling
         let headerLabel = NSTextField(labelWithString: title.uppercased())
         headerLabel.font = .systemFont(ofSize: 10, weight: .semibold)
         headerLabel.textColor = .secondaryLabelColor
-        headerLabel.frame = NSRect(x: 16, y: yPos + 4, width: 400, height: 14)
+        headerLabel.frame = NSRect(x: 36, y: yPos + 4, width: 400, height: 14)
         headerLabel.isBezeled = false
         headerLabel.isEditable = false
         headerLabel.drawsBackground = false
@@ -344,11 +470,33 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         let favorites = UserDefaults.standard.array(forKey: "FavoritePorts") as? [Int] ?? []
         let isFavorited = favorites.contains(port.port)
 
+        // Row background - animated hover effect
+        let rowBackground = HoverBox(frame: NSRect(x: 8, y: yPos + 1, width: 444, height: 43))
+        rowBackground.boxType = .custom
+        rowBackground.borderWidth = 0
+        rowBackground.cornerRadius = 6
+        let isSelected = selectedPortNumbers.contains(port.port)
+        rowBackground.fillColor = isSelected ?
+            NSColor.controlAccentColor.withAlphaComponent(0.1) : .clear
+        rowBackground.normalFillColor = isSelected ?
+            NSColor.controlAccentColor.withAlphaComponent(0.1) : .clear
+        rowBackground.hoverFillColor = isSelected ?
+            NSColor.controlAccentColor.withAlphaComponent(0.15) :
+            NSColor.controlAccentColor.withAlphaComponent(0.05)
+        documentView.addSubview(rowBackground)
+
+        // Status indicator dot - color coded by category
+        let statusDot = NSView(frame: NSRect(x: 20, y: yPos + 19, width: 8, height: 8))
+        statusDot.wantsLayer = true
+        statusDot.layer?.cornerRadius = 4
+        statusDot.layer?.backgroundColor = getCategoryColor(for: port.category).cgColor
+        documentView.addSubview(statusDot)
+
         // Port number - native table style
         let portLabel = NSTextField(labelWithString: ":\(port.port)")
-        portLabel.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        portLabel.font = .monospacedSystemFont(ofSize: 13, weight: .medium)
         portLabel.textColor = .labelColor
-        portLabel.frame = NSRect(x: 16, y: yPos + 16, width: 60, height: 16)
+        portLabel.frame = NSRect(x: 36, y: yPos + 16, width: 60, height: 16)
         portLabel.isBezeled = false
         portLabel.isEditable = false
         portLabel.drawsBackground = false
@@ -356,9 +504,9 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
 
         // Process name
         let processLabel = NSTextField(labelWithString: port.process)
-        processLabel.font = .systemFont(ofSize: 13, weight: .regular)
+        processLabel.font = .systemFont(ofSize: 13, weight: .medium)
         processLabel.textColor = .labelColor
-        processLabel.frame = NSRect(x: 82, y: yPos + 16, width: 80, height: 16)
+        processLabel.frame = NSRect(x: 102, y: yPos + 16, width: 80, height: 16)
         processLabel.isBezeled = false
         processLabel.isEditable = false
         processLabel.drawsBackground = false
@@ -368,22 +516,33 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         let pidLabel = NSTextField(labelWithString: "\(port.pid)")
         pidLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         pidLabel.textColor = .secondaryLabelColor
-        pidLabel.frame = NSRect(x: 168, y: yPos + 17, width: 50, height: 14)
+        pidLabel.frame = NSRect(x: 188, y: yPos + 17, width: 50, height: 14)
         pidLabel.isBezeled = false
         pidLabel.isEditable = false
         pidLabel.drawsBackground = false
         documentView.addSubview(pidLabel)
 
-        // Framework badge - native style
+        // Framework badge - native style with visual badge
         if let framework = port.framework {
-            let frameworkLabel = NSTextField(labelWithString: framework)
-            frameworkLabel.font = .systemFont(ofSize: 11, weight: .regular)
-            frameworkLabel.textColor = .secondaryLabelColor
-            frameworkLabel.frame = NSRect(x: 82, y: yPos + 4, width: 120, height: 12)
+            let frameworkBadge = NSBox(frame: NSRect(x: 102, y: yPos + 3, width: 0, height: 16))
+            frameworkBadge.boxType = .custom
+            frameworkBadge.borderWidth = 0
+            frameworkBadge.cornerRadius = 3
+            frameworkBadge.fillColor = getCategoryColor(for: port.category).withAlphaComponent(0.15)
+
+            let frameworkLabel = NSTextField(labelWithString: " \(framework) ")
+            frameworkLabel.font = .systemFont(ofSize: 10, weight: .medium)
+            frameworkLabel.textColor = getCategoryColor(for: port.category)
             frameworkLabel.isBezeled = false
             frameworkLabel.isEditable = false
             frameworkLabel.drawsBackground = false
+            frameworkLabel.sizeToFit()
+
+            frameworkBadge.frame = NSRect(x: 102, y: yPos + 3, width: min(frameworkLabel.frame.width, 100), height: 14)
+            frameworkLabel.frame = NSRect(x: 102, y: yPos + 4, width: min(frameworkLabel.frame.width, 100), height: 12)
             frameworkLabel.lineBreakMode = .byTruncatingTail
+
+            documentView.addSubview(frameworkBadge)
             documentView.addSubview(frameworkLabel)
         }
 
@@ -391,26 +550,33 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         let userLabel = NSTextField(labelWithString: port.user)
         userLabel.font = .systemFont(ofSize: 11, weight: .regular)
         userLabel.textColor = .tertiaryLabelColor
-        userLabel.frame = NSRect(x: 224, y: yPos + 17, width: 60, height: 12)
+        userLabel.frame = NSRect(x: 244, y: yPos + 17, width: 60, height: 12)
         userLabel.isBezeled = false
         userLabel.isEditable = false
         userLabel.drawsBackground = false
         documentView.addSubview(userLabel)
 
-        // Docker indicator - native
+        // Docker indicator - enhanced visual badge
         if let container = port.dockerContainer {
+            let dockerBadge = NSBox(frame: NSRect(x: 310, y: yPos + 14, width: 24, height: 18))
+            dockerBadge.boxType = .custom
+            dockerBadge.borderWidth = 0
+            dockerBadge.cornerRadius = 4
+            dockerBadge.fillColor = NSColor.systemBlue.withAlphaComponent(0.15)
+            documentView.addSubview(dockerBadge)
+
             let dockerLabel = NSTextField(labelWithString: "🐳")
-            dockerLabel.font = .systemFont(ofSize: 11)
-            dockerLabel.frame = NSRect(x: 290, y: yPos + 16, width: 16, height: 14)
+            dockerLabel.font = .systemFont(ofSize: 12)
+            dockerLabel.frame = NSRect(x: 314, y: yPos + 15, width: 16, height: 16)
             dockerLabel.isBezeled = false
             dockerLabel.isEditable = false
             dockerLabel.drawsBackground = false
-            dockerLabel.toolTip = container
+            dockerLabel.toolTip = "Docker: \(container)"
             documentView.addSubview(dockerLabel)
         }
 
-        // Star button - native
-        let starButton = NSButton(frame: NSRect(x: 354, y: yPos + 13, width: 20, height: 20))
+        // Star button - animated with hover
+        let starButton = HoverButton(frame: NSRect(x: 354, y: yPos + 13, width: 20, height: 20))
         starButton.isBordered = false
         starButton.bezelStyle = .regularSquare
         starButton.title = ""
@@ -419,14 +585,17 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         starButton.image = NSImage(systemSymbolName: starIcon, accessibilityDescription: "Favorite")?
             .withSymbolConfiguration(starConfig)
         starButton.contentTintColor = isFavorited ? .systemYellow : .tertiaryLabelColor
+        starButton.normalColor = isFavorited ? .systemYellow : .tertiaryLabelColor
+        starButton.hoverColor = .systemYellow
+        starButton.alphaValue = isFavorited ? 1.0 : 0.5
         starButton.tag = index
         starButton.target = self
         starButton.action = #selector(toggleFavorite(_:))
         starButton.toolTip = isFavorited ? "Unpin" : "Pin"
         documentView.addSubview(starButton)
 
-        // Kill button - native
-        let killButton = NSButton(frame: NSRect(x: 380, y: yPos + 13, width: 20, height: 20))
+        // Kill button - animated with hover
+        let killButton = HoverButton(frame: NSRect(x: 380, y: yPos + 13, width: 20, height: 20))
         killButton.isBordered = false
         killButton.bezelStyle = .regularSquare
         killButton.title = ""
@@ -434,6 +603,9 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         killButton.image = NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: "Kill")?
             .withSymbolConfiguration(killConfig)
         killButton.contentTintColor = .systemRed
+        killButton.normalColor = .systemRed
+        killButton.hoverColor = .systemRed.blended(withFraction: 0.3, of: .white) ?? .systemRed
+        killButton.alphaValue = 0.5
         killButton.tag = index
         killButton.target = self
         killButton.action = #selector(portClicked(_:))
@@ -450,13 +622,14 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         checkbox.action = #selector(togglePortSelection(_:))
         documentView.addSubview(checkbox)
 
-        // Separator line - native
+        // Separator line - native (subtle)
         let separator = NSBox(frame: NSRect(x: 16, y: yPos, width: 428, height: 1))
         separator.boxType = .separator
+        separator.alphaValue = 0.3
         documentView.addSubview(separator)
 
         // Make row clickable for context menu
-        let clickArea = NSButton(frame: NSRect(x: 16, y: yPos, width: 340, height: 44))
+        let clickArea = NSButton(frame: NSRect(x: 8, y: yPos, width: 340, height: 44))
         clickArea.isBordered = false
         clickArea.bezelStyle = .regularSquare
         clickArea.title = ""
@@ -551,17 +724,23 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
         // Save current scroll position
         let scrollPosition = scrollView.contentView.bounds.origin
 
-        buildScrollViewContent()
+        // Animate the transition
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.25
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
 
-        let countText = isFiltering ? "\(filteredPorts.count)/\(portsSnapshot.count)" : "\(portsSnapshot.count)"
-        countLabel.stringValue = countText
+            buildScrollViewContent()
 
-        // Restore scroll position if needed
-        if preserveScroll {
-            scrollView.contentView.scroll(to: scrollPosition)
-        } else {
-            scrollView.contentView.scroll(to: NSPoint.zero)
-        }
+            let countText = isFiltering ? "\(filteredPorts.count)/\(portsSnapshot.count)" : "\(portsSnapshot.count)"
+            countLabel.animator().stringValue = countText
+
+            // Restore scroll position if needed
+            if preserveScroll {
+                scrollView.contentView.animator().setBoundsOrigin(scrollPosition)
+            } else {
+                scrollView.contentView.animator().setBoundsOrigin(NSPoint.zero)
+            }
+        })
     }
 
     // MARK: - Search
@@ -627,11 +806,25 @@ class StaticPortListViewController: NSViewController, NSTextFieldDelegate {
             selectedPortNumbers.remove(portNumber)
         }
 
-        // Show/hide Kill Selected button
-        killSelectedButton.isHidden = selectedPortNumbers.isEmpty
-        if !selectedPortNumbers.isEmpty {
-            killSelectedButton.title = "Kill \(selectedPortNumbers.count) Selected"
-        }
+        // Animate Kill Selected button visibility
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+            if selectedPortNumbers.isEmpty {
+                killSelectedButton.animator().alphaValue = 0
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    self.killSelectedButton.isHidden = true
+                }
+            } else {
+                if killSelectedButton.isHidden {
+                    killSelectedButton.alphaValue = 0
+                    killSelectedButton.isHidden = false
+                }
+                killSelectedButton.animator().alphaValue = 1
+                killSelectedButton.title = "Kill \(selectedPortNumbers.count) Selected"
+            }
+        })
 
         // Update AppDelegate's selection tracking
         appDelegate?.selectedPortNumbers = selectedPortNumbers

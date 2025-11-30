@@ -222,7 +222,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = """
         A native macOS menu bar app for managing TCP ports.
 
-        Version 1.5.0
+        Version 1.6.0
 
         Features:
         • View all listening TCP ports
@@ -672,12 +672,20 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func updatePortListViewController() {
         // For StaticPortListViewController, we need to recreate it with fresh data
         if popover.isShown {
-            // Save current selections from existing view controller
+            var scrollPosition: NSPoint?
+
+            // Save current selections and scroll position from existing view controller
             if let currentVC = popover.contentViewController as? StaticPortListViewController {
                 selectedPortNumbers = currentVC.selectedPortNumbers
+                scrollPosition = currentVC.currentScrollPosition
             }
 
-            let viewController = StaticPortListViewController(ports: ports, selectedPorts: selectedPortNumbers)
+            // Create new view controller with saved state
+            let viewController = StaticPortListViewController(
+                ports: ports,
+                selectedPorts: selectedPortNumbers,
+                scrollPosition: scrollPosition
+            )
             viewController.appDelegate = self
             popover.contentViewController = viewController
         }
